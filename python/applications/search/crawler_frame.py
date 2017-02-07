@@ -2,7 +2,7 @@ import logging
 from datamodel.search.datamodel import ProducedLink, OneUnProcessedGroup, robot_manager
 from spacetime_local.IApplication import IApplication
 from spacetime_local.declarations import Producer, GetterSetter, Getter
-#from lxml import html,etree
+from lxml import html,etree
 import re, os
 from time import time
 from StringIO import StringIO
@@ -93,10 +93,18 @@ def extract_next_links(rawDatas):
     Suggested library: lxml
     '''
     parser = etree.HTMLParser()
-    tree = etree.parse(StringIO(rawDatas), parser)
-    outputLinks = tree.xpath('//a/@href')
-    for link in outputLinks:
-        print(link)
+    for rawContent in rawDatas:
+        tree = etree.parse(StringIO(rawContent.content), parser)
+        links = tree.xpath('//a/@href')
+        for link in links:
+            extracted_link = urljoin(rawContent.url, link)
+            if not extracted_link.startswith('http'):
+                url = re.search('\'(.+?)\'', extracted_link)
+                if url:
+                    found = url.group(1)
+                    outputLinks.append(found)
+            else:
+                outputLinks.append(extracted_link)
     return outputLinks
 
 def is_valid(url):
@@ -106,7 +114,7 @@ def is_valid(url):
 
     This is a great place to filter out crawler traps.
     '''
-    traps = ['calendar', 'ganglia','spotlight_butterworth_beall_2014_winners']
+    traps = ['calendar', 'ganglia','butterworth', 'arcus-3']
     parsed = urlparse(url)
     if parsed.scheme not in set(["http", "https"]):
         return False
@@ -117,7 +125,7 @@ def is_valid(url):
             + "|ps|eps|tex|ppt|pptx|doc|docx|xls|xlsx|names|data|dat|exe|bz2|tar|msi|bin|7z|psd|dmg|iso|epub|dll|cnf|tgz|sha1" \
             + "|thmx|mso|arff|rtf|jar|csv"\
             + "|rm|smil|wmv|swf|wma|zip|rar|gz)$", parsed.path.lower()) \
-            and (trap not in parsed.hostname for trap in traps)
+            and not any(trap in url for trap in traps)
 
     except TypeError:
         print ("TypeError for ", parsed)
