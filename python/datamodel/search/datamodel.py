@@ -11,7 +11,7 @@ from pcc.set import pcc_set
 from pcc.projection import projection
 from pcc.attributes import dimension, primarykey, count
 from pcc.impure import impure
-import socket, base64
+import socket, base64, requests
 try:
     from urllib2 import Request, urlopen, HTTPError, URLError
     from urlparse import urlparse, parse_qs
@@ -25,6 +25,22 @@ from datamodel.search.Robot import Robot
 
 robot_manager = Robot()
 
+class UrlResponse(object):
+    def __init__(self, dataframe_obj, url, content, error_message, http_code, headers, is_redirected, final_url = None):
+        self.dataframe_obj = dataframe_obj # do not change
+        
+        self.url = url
+        self.content = content
+        self.error_message = error_message
+        self.headers = headers
+        self.http_code = http_code
+        self.is_redirected = is_redirected
+        self.final_url = final_url
+        
+        # Things that have to be set later by crawlers
+        self.bad_url = False
+        self.out_links = set()
+
 @pcc_set
 class Link(object):
     @primarykey(str)
@@ -33,12 +49,12 @@ class Link(object):
     @url.setter
     def url(self, value): self._url = value
 
-    @dimension(bool)
+    @dimension(int)
     def underprocess(self): 
         try:
             return self._up
         except AttributeError:
-            return False
+            return 0
 
     @underprocess.setter
     def underprocess(self, value): self._up = value
@@ -91,7 +107,7 @@ class Link(object):
     @downloaded_by.setter
     def downloaded_by(self, value): self._downloaded_by = value
 
-    @dimension(str)
+    @dimension(list)
     def first_detected_by(self): return self._fdb
 
     @first_detected_by.setter
@@ -130,82 +146,145 @@ class Link(object):
     def download_complete(self, v):
         self._dc = v
 
+    @dimension(list)
+    def bad_url(self):
+        try:
+            return self._bu
+        except AttributeError:
+            return list()
+
+    @bad_url.setter
+    def bad_url(self, v):
+        self._bu = v
+
+    @dimension(dict)
+    def http_headers(self):
+        try:
+            return self._http_headers
+        except AttributeError:
+            return dict()
+
+    @http_headers.setter
+    def http_headers(self, v):
+        self._http_headers = dict(v)
+
+    @dimension(bool)
+    def is_redirected(self):
+        try:
+            return self._is_redirect
+        except AttributeError:
+            return False
+
+    @is_redirected.setter
+    def is_redirected(self, v):
+        self._is_redirect = v
+
+    @dimension(str)
+    def final_url(self):
+        try:
+            return self._final_url
+        except AttributeError:
+            return ""
+
+    @final_url.setter
+    def final_url(self, v):
+        self._final_url = v
+
+    @dimension(list)
+    def marked_invalid_by(self):
+        try:
+            return self._mib
+        except AttributeError:
+            return list()
+
+    @marked_invalid_by.setter
+    def marked_invalid_by(self, v):
+        self._mib = v
+
     @property
     def full_url(self): return self.scheme + "://" + self.url
 
     def __ProcessUrlData(self, raw_content, useragentstr):
         self.raw_content = raw_content
-        self.downloaded_by = useragentstr
         self.download_complete = True
-        return self.raw_content, True
+        return UrlResponse(self, self.full_url, self.raw_content, "", self.http_code, self.http_headers, self.is_redirected, self.final_url), True
 
     def download(self, useragentstring, timeout = 2, MaxPageSize = 1048576, MaxRetryDownloadOnFail = 5, retry_count = 0):
         self.isprocessed = True
+        self.downloaded_by = useragentstring
         url = self.full_url
         if self.raw_content != None:
             print ("Downloading " + url + " from cache.")
-            return self.raw_content, True
+            return UrlResponse(self, url, self.raw_content, "", self.http_headers, self.is_redirected, self.final_url), True
         else:
             try:
                 print ("Downloading " + url + " from source.")
             except Exception:
                 pass
             try:
-                urlreq = Request(url, None, {"User-Agent" : useragentstring})
-                urldata = urlopen(urlreq, timeout = timeout)
-                self.http_code = urldata.code
+                urlresp = requests.get(url,
+                                       timeout = timeout, 
+                                       headers = {"user-agent" : useragentstring})
+                
+                self.http_code = urlresp.status_code
+                self.is_redirected = len(urlresp.history) > 0
+                self.final_url = urlresp.url if self.is_redirected else None
+                urlresp.raise_for_status()
+                self.http_headers = dict(urlresp.headers)
                 try:
-                    size = int(urldata.info().getheaders("Content-Length")[0])
+                    size = int(urlresp.headers.get("Content-Length"))
+                except TypeError:
+                    size = -1
                 except AttributeError:
-                    failobj = None
-                    sizestr = urldata.info().get("Content-Length", failobj)
-                    if sizestr:
-                        size = int(sizestr)
-                    else:
-                        size = -1
+                    size = -1
                 except IndexError:
                     size = -1
                 try:
-                    content_type = urldata.info().getheaders("Content-Type")[0]
+                    content_type = urlresp.headers.get("Content-Type")
                     mime = content_type.strip().split(";")[0].strip().lower()
                     if mime not in [ "text/plain", "text/html", "application/xml" ]:
                         self.error_reason = "Mime does not match"
-                        return "", False
+                        return UrlResponse(self, url, "", self.error_reason, self.http_code, self.http_headers, self.is_redirected, self.final_url), False
                 except Exception:
                     pass
-                if size < MaxPageSize and urldata.code > 199 and urldata.code < 300:
-                    return self.__ProcessUrlData(urldata.read(), useragentstring)
+                if size < MaxPageSize and urlresp.status_code > 199 and urlresp.status_code < 300:
+                    return self.__ProcessUrlData(urlresp.text.encode("utf-8"), useragentstring)
                 elif size >= MaxPageSize:
                     self.error_reason = "Size too large."
-                    return "", False
+                    return UrlResponse(self, url, "", self.error_reason, self.http_code, self.http_headers, self.is_redirected, self.final_url), False
 
-            except HTTPError, e:
+            except requests.HTTPError, e:
                 self.http_code = 400
-                self.error_reason = str(e.reason)
-                return "", False
-            except URLError, e:
-                self.http_code = 400
-                self.error_reason = str(e.reason)
-                return "", False
-            except httplib.HTTPException:
-                self.http_code = 400
-                return "", False
+                self.error_reason = str(urlresp.reason)
+                return UrlResponse(self, url, "", self.error_reason, self.http_code, self.http_headers, self.is_redirected, self.final_url), False
             except socket.error:
                 if (retry_count == MaxRetryDownloadOnFail):
                     self.http_code = 400
                     self.error_reason = "Socket error. Retries failed."
-                    return "", False
+                    return UrlResponse(self, url, "", self.error_reason, self.http_code, self.http_headers, self.is_redirected, self.final_url), False
                 try:
                     print ("Retrying " + url + " " + str(retry_count + 1) + " time")
                 except Exception:
                     pass
                 return self.download(useragentstring, timeout, MaxPageSize, MaxRetryDownloadOnFail, retry_count + 1)
-            except Exception, e:
-                # Can throw unicode errors and others... don't halt the thread
-                self.error_reason = "Unknown error: " + e.message 
+            except requests.ConnectionError, e:
                 self.http_code = 499
-                print(type(e).__name__ + " occurred during URL Fetching.")
-        return "", False
+                self.error_reason = str(e.message)
+            except requests.RequestException, e:
+                self.http_code = 499
+                self.error_reason = str(e.message)
+            #except Exception, e:
+            #    # Can throw unicode errors and others... don't halt the thread
+            #    self.error_reason = "Unknown error: " + str(e.message)
+            #    self.http_code = 499
+            #    print(type(e).__name__ + " occurred during URL Fetching.")
+        return UrlResponse(self, url, "", self.error_reason, self.http_code, self.http_headers, self.is_redirected, self.final_url), False
+
+@subset(Link)
+class LinkMarkedBad(object):
+    @staticmethod
+    def __predicate__(l):
+        return len(l.bad_url) > 0
 
 @projection(Link, Link.url, Link.scheme, Link.domain, Link.first_detected_by)
 class ProducedLink(object):
@@ -243,6 +322,12 @@ class DownloadedLink(object):
     @staticmethod
     def __predicate__(l):
         return l.download_complete == True and l.valid == True
+        #return True
+
+@subset(Link)
+class AllLink(object):
+    @staticmethod
+    def __predicate__(l): return True
 
 @pcc_set
 class DownloadLinkGroup(object):
@@ -267,42 +352,67 @@ class DownloadLinkGroup(object):
     def __init__(self, links):
         self.ID = None
         self.link_group = links
-        self.underprocess = False
+        self.underprocess = 0
 
 @impure
 @subset(DownloadLinkGroup)
 class OneUnProcessedGroup(object):
     @staticmethod
     def __post_process__(lg):
-        lg.underprocess = True
+        lg.underprocess += 1
+        #print "count: ", lg.ID, lg.underprocess
+        #for l in lg.link_group:
+        #  l.underprocess += 1
         return lg
 
+    #@staticmethod
+    #def __query__(upls):
+    #    for upl in upls:
+    #        if OneUnProcessedGroup.__predicate__(upl):
+    #            return [upl]
+    #    return []
+
+    #@staticmethod
+    #def __orderby__(l): return l.underprocess
+
+    #__limit__ = 1
+    
     @staticmethod
     def __query__(upls):
         for upl in upls:
-            if OneUnProcessedGroup.__predicate__(upl):
+            if upl.underprocess == 0:
                 return [upl]
-        return []
+        for upl in upls:
+            if upl.underprocess == 1:
+                return [upl]
+        for item in sorted([upl for upl in upls if OneUnProcessedGroup.__predicate__(upl)], key = lambda x: x.underprocess):
+            return [item]
+        return list()
 
     @staticmethod
     def __predicate__(upl):
-        return not upl.underprocess 
+        return upl.underprocess <= 10
 
     def download(self, UserAgentString, is_valid, timeout = 2, MaxPageSize = 1048576, MaxRetryDownloadOnFail = 5, retry_count = 0):
         try:
             success_urls = list()
             result = list()
             for l in self.link_group:
-                if is_valid(l.full_url) and robot_manager.Allowed(l.full_url, UserAgentString):
-                    content, success = l.download(
-                        UserAgentString,
-                        timeout,
-                        MaxPageSize,
-                        MaxRetryDownloadOnFail,
-                        retry_count)
-                    if success:
-                        success_urls.append(l.full_url)
-                    result.append((l.full_url, content))
+                if is_valid(l.full_url):
+                    if robot_manager.Allowed(l.full_url, UserAgentString):
+                        content, success = l.download(
+                            UserAgentString,
+                            timeout,
+                            MaxPageSize,
+                            MaxRetryDownloadOnFail,
+                            retry_count)
+                        if success:
+                            success_urls.append(l.full_url)
+                        result.append(content)
+                    else:
+                        l.marked_invalid_by += ["Robot Rule"]
+                else:
+                    l.marked_invalid_by += [UserAgentString]
             return result, success_urls
         except AttributeError:
             return list(), list()
@@ -317,3 +427,23 @@ class DomainCount(object):
 
     @staticmethod
     def __predicate__(l): return l.isprocessed == True
+
+@subset(Link)
+class BadLink(object):
+    @property
+    def full_url(self): return self.scheme + "://" + self.url
+
+    @staticmethod
+    def __predicate__(l):
+        return len(l.bad_url) > 0
+
+@pcc_set
+class BadUrlPattern(object):
+    @primarykey(str)
+    def pattern(self): return self._bup
+
+    @pattern.setter
+    def pattern(self, v): self._bup = v
+
+    def __init__(self, pattern):
+        self.pattern = pattern

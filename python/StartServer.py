@@ -116,6 +116,26 @@ class SpacetimeConsole(cmd.Cmd):
             completions = [t.__realname__ for t in fs.DATAMODEL_TYPES if t.__realname__.startswith(text)]
         return completions
 
+    def do_countobjsin(self, type_text):
+        """ objsin <type>
+        Prints the primary key of all objects of a type (accepts auto-complete)
+        """
+        if type_text in fs.name2class:
+            objs = fs.Store.get(fs.name2class[type_text])
+            if objs:
+                print "============="
+                print "Number of objects in %s is %d" % (type_text, len(objs))
+                print ""
+        else:
+            print "could not find type %s" % type_text
+
+    def complete_countobjsin(self, text, line, begidx, endidx):
+        if not text:
+            completions = [t.__realname__ for t in fs.DATAMODEL_TYPES]
+        else:
+            completions = [t.__realname__ for t in fs.DATAMODEL_TYPES if t.__realname__.startswith(text)]
+        return completions
+
     def complete_list(self, text, line, begidx, endidx):
         return ['sets','apps']
 
@@ -170,7 +190,7 @@ def shutdown():
 
 if __name__== "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('-p', '--port', type=int, default=12000, help='Port where the server will listen (default: 12000)')
+    parser.add_argument('-p', '--port', type=int, default=10000, help='Port where the server will listen (default: 12000)')
     parser.add_argument('-P', '--profile', action='store_true', help='Enable profiling on store server.')
     parser.add_argument('-d', '--debug', action='store_true', help='Debug on')
     parser.add_argument('-e', '--external', action='store_true', help='Make this server externally accessible')
