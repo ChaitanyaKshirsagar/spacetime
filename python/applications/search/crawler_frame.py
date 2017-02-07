@@ -5,6 +5,7 @@ from spacetime_local.declarations import Producer, GetterSetter, Getter
 #from lxml import html,etree
 import re, os
 from time import time
+from StringIO import StringIO
 
 try:
     # For python 2
@@ -33,6 +34,7 @@ class CrawlerFrame(IApplication):
         # If Graduate studetn, change the UnderGrad part to Grad.
         self.UserAgentString = "IR W17 Grad 27123502, 90162464, 15244643"
 
+		
         self.frame = frame
         assert(self.UserAgentString != None)
         assert(self.app_id != "")
@@ -87,9 +89,14 @@ def extract_next_links(rawDatas):
     Validation of link via is_valid function is done later (see line 42).
     It is not required to remove duplicates that have already been downloaded. 
     The frontier takes care of that.
-
+    
     Suggested library: lxml
     '''
+    parser = etree.HTMLParser()
+    tree = etree.parse(StringIO(rawDatas), parser)
+    outputLinks = tree.xpath('//a/@href')
+    for link in outputLinks:
+        print(link)
     return outputLinks
 
 def is_valid(url):
@@ -99,6 +106,7 @@ def is_valid(url):
 
     This is a great place to filter out crawler traps.
     '''
+    traps = ['calendar', 'ganglia','spotlight_butterworth_beall_2014_winners']
     parsed = urlparse(url)
     if parsed.scheme not in set(["http", "https"]):
         return False
@@ -108,7 +116,8 @@ def is_valid(url):
             + "|wav|avi|mov|mpeg|ram|m4v|mkv|ogg|ogv|pdf" \
             + "|ps|eps|tex|ppt|pptx|doc|docx|xls|xlsx|names|data|dat|exe|bz2|tar|msi|bin|7z|psd|dmg|iso|epub|dll|cnf|tgz|sha1" \
             + "|thmx|mso|arff|rtf|jar|csv"\
-            + "|rm|smil|wmv|swf|wma|zip|rar|gz)$", parsed.path.lower())
+            + "|rm|smil|wmv|swf|wma|zip|rar|gz)$", parsed.path.lower()) \
+            and (trap not in parsed.hostname for trap in traps)
 
     except TypeError:
         print ("TypeError for ", parsed)
