@@ -5,7 +5,10 @@ from spacetime_local.declarations import Producer, GetterSetter, Getter
 from lxml import html,etree
 import re, os
 from time import time
-from StringIO import StringIO
+from lxml.html.clean import Cleaner
+# from StringIO import StringIO
+# from urlparse import urljoin
+# from lxml.html import fromstring
 
 try:
     # For python 2
@@ -92,19 +95,34 @@ def extract_next_links(rawDatas):
     
     Suggested library: lxml
     '''
-    parser = etree.HTMLParser()
+    # parser = etree.HTMLParser()
+    # for rawContent in rawDatas:
+    #     tree = etree.parse(StringIO(rawContent.content), parser)
+    #     links = tree.xpath('//a/@href')
+    #     for link in links:
+    #         extracted_link = urljoin(rawContent.url, link)
+    #         if not extracted_link.startswith('http'):
+    #             url = re.search('\'(.+?)\'', extracted_link)
+    #             if url:
+    #                 found = url.group(1)
+    #                 outputLinks.append(found)
+    #         else:
+    #             outputLinks.append(extracted_link)
+    # return outputLinks
     for rawContent in rawDatas:
-        tree = etree.parse(StringIO(rawContent.content), parser)
-        links = tree.xpath('//a/@href')
+        doc = html.fromstring(rawContent.content, base_url=rawContent.url)
+        cleaner = Cleaner(remove_tags=['footer'], remove_unknown_tags=True)
+        cleaned_text = cleaner.clean_html(doc)
+        cleaned_text.make_links_absolute()
+        links = cleaned_text.iterlinks()
         for link in links:
-            extracted_link = urljoin(rawContent.url, link)
-            if not extracted_link.startswith('http'):
-                url = re.search('\'(.+?)\'', extracted_link)
+            if not link[2].startswith('http'):
+                url = re.search('\'(.+?)\'', link[2])
                 if url:
                     found = url.group(1)
                     outputLinks.append(found)
             else:
-                outputLinks.append(extracted_link)
+                outputLinks.append(link[2])
     return outputLinks
 
 def is_valid(url):
@@ -124,7 +142,7 @@ def is_valid(url):
             + "|wav|avi|mov|mpeg|ram|m4v|mkv|ogg|ogv|pdf" \
             + "|ps|eps|tex|ppt|pptx|doc|docx|xls|xlsx|names|data|dat|exe|bz2|tar|msi|bin|7z|psd|dmg|iso|epub|dll|cnf|tgz|sha1" \
             + "|thmx|mso|arff|rtf|jar|csv"\
-            + "|rm|smil|wmv|swf|wma|zip|rar|gz)$", parsed.path.lower()) \
+            + "|rm|smil|wmv|swf|wma|zip|rar|gz)$", url.lower()) \
             and not any(trap in url for trap in traps)
 
     except TypeError:
